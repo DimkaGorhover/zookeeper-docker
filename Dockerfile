@@ -1,34 +1,51 @@
-FROM wurstmeister/base
+FROM openjdk:8-jre-alpine as builder
 
-MAINTAINER Wurstmeister
+LABEL maintainer="Wurstmeister"
 
-ENV ZOOKEEPER_VERSION 3.4.13
+ARG ZOOKEEPER_VERSION="3.4.14"
 
-#Download Zookeeper
-RUN wget -q http://mirror.vorboss.net/apache/zookeeper/zookeeper-${ZOOKEEPER_VERSION}/zookeeper-${ZOOKEEPER_VERSION}.tar.gz && \
-wget -q https://www.apache.org/dist/zookeeper/KEYS && \
-wget -q https://www.apache.org/dist/zookeeper/zookeeper-${ZOOKEEPER_VERSION}/zookeeper-${ZOOKEEPER_VERSION}.tar.gz.asc && \
-wget -q https://www.apache.org/dist/zookeeper/zookeeper-${ZOOKEEPER_VERSION}/zookeeper-${ZOOKEEPER_VERSION}.tar.gz.md5
+ENV DISTRO_NAME=zookeeper-${ZOOKEEPER_VERSION}
 
-#Verify download
-RUN md5sum -c zookeeper-${ZOOKEEPER_VERSION}.tar.gz.md5 && \
-gpg --import KEYS && \
-gpg --verify zookeeper-${ZOOKEEPER_VERSION}.tar.gz.asc
+WORKDIR /tmp
 
-#Install
-RUN tar -xzf zookeeper-${ZOOKEEPER_VERSION}.tar.gz -C /opt
+RUN mkdir -p /opt && \
+    apk add --update wget gnupg bash && \
+    java -version && \
+# Download Zookeeper
+    wget -q "https://www.apache.org/dist/zookeeper/$DISTRO_NAME/$DISTRO_NAME.tar.gz"; \
+    wget -q "https://www.apache.org/dist/zookeeper/KEYS" && \
+    wget -q "https://www.apache.org/dist/zookeeper/${DISTRO_NAME}/${DISTRO_NAME}.tar.gz.asc" && \
+    wget -q "https://www.apache.org/dist/zookeeper/${DISTRO_NAME}/${DISTRO_NAME}.tar.gz.sha256" && \
+    wget -q "https://www.apache.org/dist/zookeeper/${DISTRO_NAME}/${DISTRO_NAME}.tar.gz.sha512" && \
+# Verify download
+    sha256sum -c zookeeper-${ZOOKEEPER_VERSION}.tar.gz.sha256 && \
+    sha512sum -c zookeeper-${ZOOKEEPER_VERSION}.tar.gz.sha512 && \
+    gpg --import KEYS && \
+    gpg --verify ${DISTRO_NAME}.tar.gz.asc && \
+# Install
+    tar -xzf ${DISTRO_NAME}.tar.gz -C /opt && \
+# Configure
+    mv /opt/${DISTRO_NAME} /opt/zk && \
+    echo "${ZOOKEEPER_VERSION}" > /opt/zk/VERSION && \
+    mv /opt/zk/conf/zoo_sample.cfg /opt/zk/conf/zoo.cfg && \
+    sed -i "s|/tmp/zookeeper|/opt/zk/data|g" /opt/zk/conf/zoo.cfg && \
+    mkdir /opt/zk/data
 
-#Configure
-RUN mv /opt/zookeeper-${ZOOKEEPER_VERSION}/conf/zoo_sample.cfg /opt/zookeeper-${ZOOKEEPER_VERSION}/conf/zoo.cfg
+###############################################################################
+FROM openjdk:8-jre-alpine
 
-ENV JAVA_HOME /usr/lib/jvm/java-7-openjdk-amd64
-ENV ZK_HOME /opt/zookeeper-${ZOOKEEPER_VERSION}
-RUN sed  -i "s|/tmp/zookeeper|$ZK_HOME/data|g" $ZK_HOME/conf/zoo.cfg; mkdir $ZK_HOME/data
+RUN apk add --update bash
 
-ADD start-zk.sh /usr/bin/start-zk.sh 
+COPY --from=builder /opt/zk /opt/zk
+
+ADD start-zk.sh /usr/bin/start-zk.sh
+
 EXPOSE 2181 2888 3888
 
-WORKDIR /opt/zookeeper-${ZOOKEEPER_VERSION}
-VOLUME ["/opt/zookeeper-${ZOOKEEPER_VERSION}/conf", "/opt/zookeeper-${ZOOKEEPER_VERSION}/data"]
+WORKDIR /opt/zk
+VOLUME ["/opt/zk/conf", "/opt/zk/data"]
 
-CMD /usr/sbin/sshd && bash /usr/bin/start-zk.sh
+HEALTHCHECK --interval=10m --timeout=3s --retries=3 \
+    CMD sh -c bin/zkServer.sh status
+
+CMD /usr/bin/start-zk.sh
